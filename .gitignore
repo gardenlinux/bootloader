@@ -1,1 +1,4 @@
+.tmp
+bzImage
+linux
 mbr.bin
