@@ -15,6 +15,8 @@ main:
 	mov      si,       msg                      ; load msg ptr into si
 	call     print_str                          ; print_str(msg)
 
+	call     debug
+
 ; halts execution
 halt:
 	hlt                                         ; halt CPU
@@ -37,11 +39,20 @@ msg:
 	db "hello", 0x0d, 0x0a, 0x00
 
 ; assert that we have not over-run the maximum size of an MBR bootloader
-%if ($-$$) > 0x01be
-	%error "MBR code exceeds 446 bytes"
+%if ($-$$) > 0x01bd
+	%error "MBR code exceeds 445 bytes"
 %endif
 
 ; padd remaining space with zeros
+%rep 0x01bd-($-$$)
+	db 0
+%endrep
+
+; debug label, call this to effectively set a breakpoint in code
+debug:
+	ret                                         ; return instruction on addr 0x7dbd to set debugger breakpoint at
+
+; empty partition table
 %rep 0x01fe-($-$$)
 	db 0
 %endrep

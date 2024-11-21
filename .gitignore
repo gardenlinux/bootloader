@@ -2,3 +2,4 @@
 bzImage
 linux
 mbr.bin
+serial.log

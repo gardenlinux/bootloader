@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
 	ca-certificates \
 	curl \
 	flex \
+	gdb-multiarch \
 	git \
 	libelf-dev \
 	libssl-dev \
