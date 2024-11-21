@@ -4,6 +4,13 @@ MAKEFLAGS += --no-builtin-rules
 .PHONY: link_tmp clean test
 .SECONDARY: linux/arch/x86/boot/bzImage linux/.config linux
 
+disk: mbr.bin real_mode_kernel
+	echo 'building $@ [$^]'
+	truncate -s 0 '$@'
+	dd if=$(word 1,$^) of=$@ bs=512 count=1 conv=notrunc 2> /dev/null
+	dd if=/dev/zero of=$@ bs=512 count=64 seek=33 conv=notrunc 2> /dev/null
+	dd if=$(word 2,$^) of=$@ bs=512 count=64 seek=33 conv=notrunc 2> /dev/null
+
 mbr.bin: mbr.asm
 	echo 'building $^ -> $@'
 	nasm -f bin -o '$@' '$<'
@@ -46,11 +53,11 @@ clean: clean_tmp
 clean_tmp:
 	rm -rf "$$(readlink .tmp)" .tmp linux
 
-test: mbr.bin
+test: disk
 	echo 'running $< in qemu'
 	./run.sh -drive file='$<',format=raw
 
-debug: mbr.bin
+debug: disk
 	echo 'running $< in qemu in debug mode (32bit only, will fail once entered kernel)'
 	./debug.sh -drive file='$<',format=raw
 

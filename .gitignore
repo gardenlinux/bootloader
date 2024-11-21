@@ -1,5 +1,6 @@
 .tmp
 bzImage
+disk
 linux
 mbr.bin
 real_mode_kernel
