@@ -9,6 +9,9 @@ mbr.bin: mbr.asm
 	nasm -f bin -o '$@' '$<'
 	hexdump -vC '$@'
 
+real_mode_kernel: bzImage
+	setup_sects="$$(./parse_kernel_header.py '$<' setup_sects '%d')" && dd if='$<' of='$@' bs=512 count="$$setup_sects"
+
 bzImage: linux/arch/x86/boot/bzImage
 	cp '$<' '$@'
 

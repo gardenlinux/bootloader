@@ -2,4 +2,5 @@
 bzImage
 linux
 mbr.bin
+real_mode_kernel
 serial.log
