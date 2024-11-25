@@ -1,7 +1,11 @@
 .tmp
 bzImage
 disk
+initrd
 linux
 mbr.bin
+mmap
 mmap.bin
 serial.log
+cmdline
+hello

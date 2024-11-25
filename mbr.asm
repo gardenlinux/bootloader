@@ -5,11 +5,11 @@ BITS 16
 ;
 ; === low mem ===
 ;
-;        ? - 0x007c00   stack (grows down dynamically)
-; 0x007c00 - 0x007dbe   bootloader
-; 0x007dbe - 0x007dfe   partition table
-; 0x007dfe - 0x007e00   boot signature
-; 0x008000 - 0x008400   mmap (maps disk LBA to memory locations)
+;         ? - 0x0007c00 stack (grows down dynamically)
+; 0x0007c00 - 0x0007dbe bootloader
+; 0x0007dbe - 0x0007dfe partition table
+; 0x0007dfe - 0x0007e00 boot signature
+; 0x0008000 - 0x0008400 mmap (maps disk LBA to memory locations)
 ;                       format:
 ;                         array of 64 entries, each 16 bytes long
 ;                         entry format:
@@ -17,15 +17,17 @@ BITS 16
 ;                           dword  LBA address
 ;                           dword  memory address
 ;                           (zero padding to align each entry on 16 byte boundry)
+; 0x00083fc - 0x0008400 initrd size (replaces part of the padding of the final mmap entry)
 ;
-; 0x010000 - 0x018000   real mode kernel code
-; 0x018000 - 0x01f000   real mode kernel heap
-; 0x01f000 - 0x01f800   kernel cmdline
-; 0x040000 - 0x048000   disk read temp buffer (for loading protected mode kernel code)
+; 0x0010000 - 0x0018000 real mode kernel code
+; 0x0018000 - 0x001f000 real mode kernel heap
+; 0x001f000 - 0x001f800 kernel cmdline
+; 0x0040000 - 0x0048000 disk read temp buffer (for loading protected mode kernel code)
 ;
 ; === high mem ===
 ;
-; 0x100000 - ?          protected mode kernel code
+; 0x0100000 - ?         protected mode kernel code
+; 0x4000000 - ?         initrd
 
 
 
@@ -41,6 +43,7 @@ buffer_base_low:        equ buffer_addr % 0x010000              ; low 16 bits of
 buffer_base_mid:        equ buffer_addr / 0x010000              ; mid 8 bits of buffer address
 buffer_seg:             equ buffer_addr / 0x10                  ; memory segment of disk read buffer
 
+initrd_addr:            equ 0x4000000                           ; memory address of the initrd
 cmdline:                equ 0x01f000                            ; memory oddress of the cmdline
 kernel_stack:           equ cmdline - real_mode_addr            ; sp for kernel entry
 heap_end_ptr:           equ kernel_stack - 0x0200               ; offset from the real mode kernel code to the end of heap minus 0x0200 (as according to linux boot protocol spec)
@@ -58,9 +61,6 @@ main:
 	call     flush                              ; flush all output to serial console before mode set
 	mov      ax,       0x0002                   ; ah=0x00 (set video mode) al=0x02 (video mode 2: text mode 80x25 chars monochrome)
 	int      0x10                               ; set video mode via interrupt
-
-	mov      si,       strings.init             ; load string ptr into si
-	call     print_line                         ; print status msg
 
 ; load mmap from disk into memory
 	mov      si,       dap                      ; point si at dap (pre-initialized with source and destination addresses for mmap load)
@@ -102,8 +102,13 @@ main:
 
 .break:
 
-	mov      si,       strings.mmap             ; load string ptr into si
-	call     print_line                         ; print status msg
+	call debug
+
+; read and store initrd size
+	mov      ax,       [mmap_addr+0x03fc]       ; read low 16 bits of initrd size into ax
+	mov      bx,       [mmap_addr+0x03fe]       ; read high 16 bits of initrd size into bx
+	push     bx                                 ; save bx onto stack
+	push     ax                                 ; save ax onto stack
 
 ; print kernel version
 	mov      ax,       real_mode_seg            ; set ax = segment of real mode kernel code
@@ -115,8 +120,14 @@ main:
 ; set kernel header fields
 	mov byte  [0x210], 0xff                     ; set type_of_loader = undefined
 	or  byte  [0x211], 0x80                     ; set CAN_USE_HEAP bit in loadflags
+	mov dword [0x218], initrd_addr              ; set ramdisk_image
 	mov word  [0x224], heap_end_ptr             ; set heap_end_ptr
 	mov dword [0x228], cmdline                  ; set cmdline
+
+	pop      ax                                 ; load ax (low 16 bits of initrd size) from stack
+	pop      bx                                 ; load bx (high 16 bits of initrd size) from stack
+	mov      [0x021c], ax                       ; write low 16 bits of initrd size
+	mov      [0x021e], bx                       ; write high 16 bits of initrd size
 
 ; execute the kernel
 	mov      ax,       ds                       ; copy the data segment into ax and from there into all other segment registers
@@ -285,11 +296,9 @@ gdt:
 
 ; string constants
 strings:
-.init: db "init", 0x00
-.mmap: db "mmap", 0x00
-.error: db "ERROR: ", 0x00
-.disk_error: db "disk read", 0x00
-.move_error: db "block move", 0x00
+.error: db "ERR: ", 0x00
+.disk_error: db "disk", 0x00
+.move_error: db "mem", 0x00
 .newline: db 0x0d, 0x0a, 0x00
 
 ; assert that we have not over-run the maximum size of an MBR bootloader
