@@ -26,7 +26,7 @@ real_mode_addr:         equ 0x00010000                          ; memory address
 real_mode_seg:          equ real_mode_addr / 0x10               ; memory segment of the real mode kernel code
 
 prot_mode_lba:          equ 0x00000800                          ; LBA location of the protected mode kernel code on disk
-prot_mode_sect:         equ 0x00008000                          ; number of sectors to load for protected mode kernel code (32 MiB)
+prot_mode_sect:         equ 0x00008000                          ; number of sectors to load for protected mode kernel code (16 MiB)
 prot_mode_addr:         equ 0x00100000                          ; memory address of the protected mode kernel code
 prot_mode_base_low:     equ prot_mode_addr % 0x010000           ; low 16 bits of protected mode kernel code address
 prot_mode_base_h:       equ prot_mode_addr / 0x010000           ; high 16 bits of protected mode kernel code address
@@ -37,6 +37,10 @@ buffer_addr:            equ 0x040000                            ; memory address
 buffer_base_low:        equ buffer_addr % 0x010000              ; low 16 bits of buffer address
 buffer_base_mid:        equ buffer_addr / 0x010000              ; mid 8 bits of buffer address
 buffer_seg:             equ buffer_addr / 0x10                  ; memory segment of disk read buffer
+
+cmdline:                equ 0x01f000                            ; memory oddress of the cmdline
+kernel_stack:           equ cmdline - real_mode_addr            ; sp for kernel entry
+heap_end_ptr:           equ kernel_stack - 0x0200               ; offset from the real mode kernel code to the end of heap minus 0x0200 (as according to linux boot protocol spec)
 
 main:
 ; perform basic init functions and setup stack
@@ -52,8 +56,8 @@ main:
 	mov      ax,       0x0002                   ; ah=0x00 (set video mode) al=0x02 (video mode 2: text mode 80x25 chars monochrome)
 	int      0x10                               ; set video mode via interrupt
 
-	mov      si,       strings.initialized      ; load string ptr into si
-	call     print_line                         ; print status msg
+;	mov      si,       strings.initialized      ; load string ptr into si
+;	call     print_line                         ; print status msg
 
 ; read real mode kernel code
 	mov      si,       dap                      ; point si at dap (pre-initialized with source and destination addresses for real mode kernel code load)
@@ -62,16 +66,16 @@ main:
 	int      0x13                               ; perform disk access via interrupt
 	jc       disk_read_error                    ; on error jump to print errror msg and halt
 
-	mov      si,       strings.real_mode_loaded ; load string ptr into si
-	call     print_line                         ; print status msg
+;	mov      si,       strings.real_mode_loaded ; load string ptr into si
+;	call     print_line                         ; print status msg
 
 ; read protected mode kernel code
 	mov dword [dap.lba], prot_mode_lba          ; point dap LBA at start of protected mode kernel code
 	mov      cx,       prot_mode_sect           ; set cx = number of protected mode kernel code sectors
 	call     read_sectors                       ; read protected mode kernel code (target pre-defined in gdt)
 
-	mov      si,       strings.prot_mode_loaded ; load string ptr into si
-	call     print_line                         ; print status msg
+;	mov      si,       strings.prot_mode_loaded ; load string ptr into si
+;	call     print_line                         ; print status msg
 
 ; print kernel version
 	mov      ax,       real_mode_seg            ; set ax = segment of real mode kernel code
@@ -80,7 +84,21 @@ main:
 	add      si,       0x0200                   ; add 0x0200 offset (somehow needed according to spec)
 	call     print_line                         ; print kernel version
 
-	call     debug                              ; debug here to check kernel data correctly loaded into memory
+; set kernel header fields
+	mov byte  [0x210], 0xff                     ; set type_of_loader = undefined
+	or  byte  [0x211], 0x80                     ; set CAN_USE_HEAP bit in loadflags
+	mov word  [0x224], heap_end_ptr             ; set heap_end_ptr
+	mov dword [0x228], cmdline                  ; set cmdline
+
+; execute the kernel
+.exec:
+	mov      ax,       ds                       ; copy the data segment into ax and from there into all other segment registers
+	mov      es,       ax                       ; extra segment
+	mov      fs,       ax                       ; fs segment
+	mov      gs,       ax                       ; gs segment
+	mov      ss,       ax                       ; stack segment
+	mov      sp,       kernel_stack             ; set the stack pointer to top of kernel heap
+	jmp      0x1020:0                           ; far jump to kernel entry point
 
 ; halts execution
 halt:
@@ -234,9 +252,9 @@ gdt:
 
 ; string constants
 strings:
-.initialized: db "initialized", 0x00
-.real_mode_loaded: db "real mode kernel code loaded", 0x00
-.prot_mode_loaded: db "protected mode kernel code loaded", 0x00
+; .initialized: db "initialized", 0x00
+; .real_mode_loaded: db "real mode kernel code loaded", 0x00
+; .prot_mode_loaded: db "protected mode kernel code loaded", 0x00
 .disk_error: db "disk read error", 0x00
 .move_error: db "block move error", 0x00
 .newline: db 0x0d, 0x0a, 0x00
