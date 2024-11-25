@@ -9,6 +9,14 @@ BITS 16
 ; 0x007c00 - 0x007dbe   bootloader
 ; 0x007dbe - 0x007dfe   partition table
 ; 0x007dfe - 0x007e00   boot signature
+; 0x008000 - 0x008400   mmap (maps disk LBA to memory locations)
+;                       format:
+;                         array of 64 entries, each 16 bytes long
+;                         entry format:
+;                           word   number of sectors
+;                           dword  LBA address
+;                           dword  memory address
+;                           (zero padding to align each entry on 16 byte boundry)
 ;
 ; 0x010000 - 0x018000   real mode kernel code
 ; 0x018000 - 0x01f000   real mode kernel heap
@@ -21,17 +29,12 @@ BITS 16
 
 
 
-real_mode_lba:          equ 0x00000021                          ; LBA location of the real mode kernel code on disk
+mmap_lba:               equ 0x00000021                          ; LBA location of mmap on disk
+mmap_addr:              equ 0x00008000                          ; memory address of mmap
+mmap_seg:               equ mmap_addr / 0x10                    ; memory segment of mmap
+
 real_mode_addr:         equ 0x00010000                          ; memory address of the real mode kernel code
 real_mode_seg:          equ real_mode_addr / 0x10               ; memory segment of the real mode kernel code
-
-prot_mode_lba:          equ 0x00000800                          ; LBA location of the protected mode kernel code on disk
-prot_mode_sect:         equ 0x00008000                          ; number of sectors to load for protected mode kernel code (16 MiB)
-prot_mode_addr:         equ 0x00100000                          ; memory address of the protected mode kernel code
-prot_mode_base_low:     equ prot_mode_addr % 0x010000           ; low 16 bits of protected mode kernel code address
-prot_mode_base_h:       equ prot_mode_addr / 0x010000           ; high 16 bits of protected mode kernel code address
-prot_mode_base_mid:     equ prot_mode_base_h % 0x0100           ; mid 8 bits of protected mode kernel code address
-prot_mode_base_high:    equ prot_mode_base_h / 0x0100           ; high 8 bits of protected mode kernel code address
 
 buffer_addr:            equ 0x040000                            ; memory address of disk read buffer
 buffer_base_low:        equ buffer_addr % 0x010000              ; low 16 bits of buffer address
@@ -56,26 +59,51 @@ main:
 	mov      ax,       0x0002                   ; ah=0x00 (set video mode) al=0x02 (video mode 2: text mode 80x25 chars monochrome)
 	int      0x10                               ; set video mode via interrupt
 
-;	mov      si,       strings.initialized      ; load string ptr into si
-;	call     print_line                         ; print status msg
+	mov      si,       strings.init             ; load string ptr into si
+	call     print_line                         ; print status msg
 
-; read real mode kernel code
-	mov      si,       dap                      ; point si at dap (pre-initialized with source and destination addresses for real mode kernel code load)
+; load mmap from disk into memory
+	mov      si,       dap                      ; point si at dap (pre-initialized with source and destination addresses for mmap load)
 	mov      dl,       0x80                     ; select disk 0x80 (primary HDD) for disk access
 	mov      ah,       0x42                     ; select LBA read mode for disk access
 	int      0x13                               ; perform disk access via interrupt
 	jc       disk_read_error                    ; on error jump to print errror msg and halt
 
-;	mov      si,       strings.real_mode_loaded ; load string ptr into si
-;	call     print_line                         ; print status msg
+	mov      dx,       0x0000                   ; init dx (loop counter) as 0
 
-; read protected mode kernel code
-	mov dword [dap.lba], prot_mode_lba          ; point dap LBA at start of protected mode kernel code
-	mov      cx,       prot_mode_sect           ; set cx = number of protected mode kernel code sectors
+.loop:
+	cmp      dx,       0x0040                   ; compare if loop counter <= 64
+	jge      .break                             ; break once loop counter == 64
+
+	mov      si,       dx                       ; copy loop counter to si
+	shl      si,       0x04                     ; multiply by 16 (size of entry)
+	add      si,       mmap_addr                ; apply as offset to mmap addr
+	mov      cx,       [si]                     ; load number of sectors from mmap entry into cx
+
+	add      si,       0x0002                   ; move pointer to LBA address of mmap entry
+	mov      ax,       [si]                     ; read low bits of LBA address
+	mov      [dap.lba], ax                      ; write low bits of LBA address to dap
+	add      si,       0x0002                   ; shift to high bits
+	mov      ax,       [si]                     ; read high bits of LBA address
+	mov      [dap.lba+0x0002], ax               ; write high bits of LBA address to dap
+
+	add      si,       0x0002                   ; move pointer to memory address of mmap entry
+	mov      ax,       [si]                     ; read low bits of memory address
+	mov      [gdt.target_base_low], ax          ; write low bits of memory address to gdt
+	add      si,       0x0002                   ; shift to high bits
+	mov      ax,       [si]                     ; read high bits of memory address
+	mov      [gdt.target_base_mid], al          ; write mid bits of memory address to gdt
+	mov      [gdt.target_base_high], ah         ; write mid bits of memory address to gdt
+
 	call     read_sectors                       ; read protected mode kernel code (target pre-defined in gdt)
 
-;	mov      si,       strings.prot_mode_loaded ; load string ptr into si
-;	call     print_line                         ; print status msg
+	inc      dx                                 ; increment loop counter
+	jmp      .loop                              ; continue loop
+
+.break:
+
+	mov      si,       strings.mmap             ; load string ptr into si
+	call     print_line                         ; print status msg
 
 ; print kernel version
 	mov      ax,       real_mode_seg            ; set ax = segment of real mode kernel code
@@ -91,7 +119,6 @@ main:
 	mov dword [0x228], cmdline                  ; set cmdline
 
 ; execute the kernel
-.exec:
 	mov      ax,       ds                       ; copy the data segment into ax and from there into all other segment registers
 	mov      es,       ax                       ; extra segment
 	mov      fs,       ax                       ; fs segment
@@ -151,7 +178,7 @@ read_sectors:
 
 .end:
 	pop      cx                                 ; restore cx
-	and      cx,       0x63                     ; compute mod 64
+	and      cx,       0x003f                   ; compute mod 64
 
 	cmp      cx,       0x0000                   ; check for no remainder
 	je       .ret                               ; skip if no remaining sectors
@@ -205,13 +232,19 @@ print_str:
 
 ; print disk read error and halt
 disk_read_error:
-	mov      si,       strings.disk_error       ; load msg ptr into si
-	call     print_line                         ; print_line(msg)
-	jmp      halt                               ; halt after printing error
+	mov      si,       strings.disk_error      ; load msg ptr into si
+	jmp      error                             ; error(msg)
 
 ; print disk read error and halt
 block_move_error:
 	mov      si,       strings.move_error       ; load msg ptr into si
+	jmp     error                               ; error(msg)
+
+error:
+	mov      dx,       si                       ; save msg ptr in dx
+	mov      si,       strings.error            ; load error prefix ptr into si
+	call     print_str                          ; print_str(error)
+	mov      si,       dx                       ; load msg ptr into si
 	call     print_line                         ; print_line(msg)
 	jmp      halt                               ; halt after printing error
 
@@ -223,9 +256,9 @@ dap:
 	dw 0x0040                                   ; number of sectors to read
 	dw 0x0000                                   ; memory offset within segment (always 0 here)
 .segment:
-	dw real_mode_seg                            ; memory segment
+	dw mmap_seg                                 ; memory segment
 .lba:
-	dd real_mode_lba                            ; low bytes of LBA address of data on disk
+	dd mmap_lba                                 ; low bytes of LBA address of data on disk
 	dd 0x00000000                               ; high bytes of LBA address (unused by us)
 
 ; global descriptor table
@@ -241,22 +274,22 @@ gdt:
 ; target segment in high mem, initially at 0x100000 - 0x108000, updated as a sliding window
 	dw 0x7fff                                   ; limit low bits (32KiB)
 .target_base_low:                               ; label to allow updating base
-	dw prot_mode_base_low                       ; base low bits
+	dw 0x0000                                   ; base low bits
 .target_base_mid:                               ; label to allow updating base
-	db prot_mode_base_mid                       ; base mid bits
+	db 0x00                                     ; base mid bits
 	db 0x93                                     ; access mode (present, type=data, rw)
 	db 0x00                                     ; flags and limit high bits
 .target_base_high:
-	db prot_mode_base_high                      ; base high bits
+	db 0x00                                     ; base high bits
 	times 16 db 0                               ; obligatory null entries
 
 ; string constants
 strings:
-; .initialized: db "initialized", 0x00
-; .real_mode_loaded: db "real mode kernel code loaded", 0x00
-; .prot_mode_loaded: db "protected mode kernel code loaded", 0x00
-.disk_error: db "disk read error", 0x00
-.move_error: db "block move error", 0x00
+.init: db "init", 0x00
+.mmap: db "mmap", 0x00
+.error: db "ERROR: ", 0x00
+.disk_error: db "disk read", 0x00
+.move_error: db "block move", 0x00
 .newline: db 0x0d, 0x0a, 0x00
 
 ; assert that we have not over-run the maximum size of an MBR bootloader

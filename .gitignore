@@ -3,6 +3,5 @@ bzImage
 disk
 linux
 mbr.bin
-protected_mode_kernel
-real_mode_kernel
+mmap.bin
 serial.log

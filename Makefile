@@ -4,24 +4,25 @@ MAKEFLAGS += --no-builtin-rules
 .PHONY: link_tmp clean test
 .SECONDARY: linux/arch/x86/boot/bzImage linux/.config linux
 
-disk: mbr.bin real_mode_kernel protected_mode_kernel
+disk: mbr.bin mmap.bin bzImage
 	echo 'building $@ [$^]'
 	truncate -s 0 '$@'
 	truncate -s 64MiB '$@'
 	dd if=$(word 1,$^) of=$@ bs=512 count=1 conv=notrunc 2> /dev/null
-	dd if=$(word 2,$^) of=$@ bs=512 count=64 seek=33 conv=notrunc 2> /dev/null
-	dd if=$(word 3,$^) of=$@ bs=512 count=65536 seek=2048 conv=notrunc 2> /dev/null
+	dd if=$(word 2,$^) of=$@ bs=512 count=2 seek=33 conv=notrunc 2> /dev/null
+	dd if=$(word 3,$^) of=$@ bs=512 count=32768 seek=2048 conv=notrunc 2> /dev/null
 
 mbr.bin: mbr.asm
 	echo 'building $^ -> $@'
 	nasm -f bin -o '$@' '$<'
 	hexdump -vC '$@'
 
-protected_mode_kernel: bzImage
-	setup_sects="$$(./parse_kernel_header.py '$<' setup_sects '%d')" && dd if='$<' of='$@' bs=512 iseek="$$setup_sects"
-
-real_mode_kernel: bzImage
-	setup_sects="$$(./parse_kernel_header.py '$<' setup_sects '%d')" && dd if='$<' of='$@' bs=512 count="$$setup_sects"
+mmap.bin: bzImage
+	truncate -s 0 '$@'
+	truncate -s 1KiB '$@'
+	./bzImage_to_mmap bzImage 2048 65536 1048576 | ./write_mmap.py | dd of='$@' bs=512 count=2 conv=notrunc 2> /dev/null
+	hexdump -C '$@'
+	./parse_mmap.py '$@'
 
 bzImage: linux/arch/x86/boot/bzImage
 	cp '$<' '$@'
@@ -52,7 +53,7 @@ link_tmp:
 	[ -d .tmp ] || ln -sf "$$(mktemp -d)" .tmp
 
 clean: clean_tmp
-	rm -f mbr.bin bzImage
+	rm -f disk mbr.bin mmap.bin bzImage
 
 clean_tmp:
 	rm -rf "$$(readlink .tmp)" .tmp linux
