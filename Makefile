@@ -9,7 +9,8 @@ disk: mbr.bin mmap.bin bzImage initrd cmdline
 	truncate -s 0 '$@'
 	truncate -s 1GiB '$@'
 	dd if=$(word 1,$^) of=$@ bs=512 count=1 conv=notrunc 2> /dev/null
-	dd if=$(word 2,$^) of=$@ bs=512 count=2 seek=33 conv=notrunc 2> /dev/null
+	dd if=$(word 1,$^) of=$@ bs=512 iseek=1 count=2 seek=33 conv=notrunc 2> /dev/null
+	dd if=$(word 2,$^) of=$@ bs=512 count=2 seek=35 conv=notrunc 2> /dev/null
 	dd if=$(word 3,$^) of=$@ bs=512 count=32768 seek=2048 conv=notrunc 2> /dev/null
 	dd if=$(word 4,$^) of=$@ bs=512 count=1048576 seek=131072 conv=notrunc 2> /dev/null
 	dd if=$(word 5,$^) of=$@ bs=512 count=1 seek=2047 conv=notrunc 2> /dev/null
