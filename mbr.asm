@@ -54,6 +54,7 @@ buffer_seg:             equ buffer_addr / 0x10                  ; memory segment
 
 initrd_addr:            equ 0x4000000                           ; memory address of the initrd
 cmdline:                equ 0x01f000                            ; memory oddress of the cmdline
+cmdline_seg:            equ cmdline / 0x10                      ; memory segment of the cmdline
 kernel_stack:           equ cmdline - real_mode_addr            ; sp for kernel entry
 heap_end_ptr:           equ kernel_stack - 0x0200               ; offset from the real mode kernel code to the end of heap minus 0x0200 (as according to linux boot protocol spec)
 
@@ -92,14 +93,9 @@ main:
 	call     print_line                         ; print selected entries label
 	pop      ax                                 ; restore ax
 
-	push     ax                                 ; sove ax
 	mov      si,       cx                       ; load boot id into si
-	mov      al,       [strings.hex_map+si]     ; convert boot id to ascii
-	mov      [strings2.boot_id_char], al        ; write out boot id ascii
-
-	mov      si,       strings2.cmdline_append  ; load msg ptr into si
-	call     print_line                         ; print_line(msg)
-	pop      ax                                 ; restore ax
+	mov      bl,       [strings.hex_map+si]     ; convert boot id to ascii
+	mov      [strings2.boot_id_char], bl        ; write out boot id ascii
 
 	call     read_mmap                          ; read mmap of selected entry into memory
 
@@ -108,6 +104,7 @@ main:
 	call     print_line                         ; print_line(msg)
 
 	call     print_kversion                     ; print the version of the loaded kernel
+	call     append_cmdline                     ; add suffix to cmdline to tell OS what entry id was booted
 	call     config_kernel                      ; set the necessary headers in the kernel setup data
 
 	call     flush                              ; flush output before entering kernel code
@@ -254,13 +251,13 @@ pick_entry:
 	mov word  [dap.segment], boot_conf_seg      ; set dap to point at boot config memory sector
 	mov dword [dap.lba],     boot_conf_lba      ; set dap to use boot config LBA
 
-	mov      dx,       si                       ; save current value of si
+	push     si                                 ; save current value of si
 	mov      si,       dap                      ; point si at dap
 	mov      dl,       0x80                     ; select disk 0x80 (primary HDD) for disk access
 	mov      ah,       0x43                     ; select LBA write mode for disk access
 	int      0x13                               ; perform disk access via interrupt
 	jc       disk_read_error                    ; on error jump to print errror msg and halt
-	mov      si, dx                             ; restore si from saved value
+	pop      si,                                ; restore si from saved value
 
 .no_dec:
 	mov      ax,       [0x01+boot_conf_addr+si] ; load mmap LBA of entry into ax
@@ -333,6 +330,38 @@ print_kversion:
 	call     print_line                         ; print kernel version
 
 	pop      ds                                 ; restore ds
+	ret                                         ; return from call
+
+; append to kernel cmdline
+; clobbers: ax, si, di
+append_cmdline:
+	push     es                                 ; save es
+	mov      ax,       cmdline_seg              ; set ax = segment of cmdline
+	mov      es,       ax                       ; set extra segment to point at cmdline
+	xor      di,       di                       ; set di = 0
+	mov      si,       strings2.cmdline_append  ; point si at cmdline_append string
+	call     str_cat                            ; concat existing cmdline with cmdline_append
+	pop      es                                 ; restore es
+	ret                                         ; return from call
+
+; concatenate two strings by appending string 2 at the end of string 1
+; inputs:
+;   es:di: ptr to string 1
+;   ds:si: ptr to string 2
+; outputs:
+;   [es:di]
+; clobbers: ax, si, di
+str_cat:
+	xor      al,       al                       ; set al = 0
+.find_null:
+	scasb                                       ; increment di and check if [di] equals null
+	jne      .find_null                         ; if not null byte continue search
+	dec      di                                 ; decrement di to go back to the null chor
+.concat:
+	lodsb                                       ; load [si] into al
+	stosb                                       ; write al to [di]
+	cmp      al,       0x00                     ; check if we read a null byte
+	jne      .concat                            ; else continue
 	ret                                         ; return from call
 
 ; setup kernel header fields
@@ -464,7 +493,7 @@ gdt:
 
 ; string constants
 strings2:
-.cmdline_append: db "bootloader.entry="
+.cmdline_append: db " bootloader.entry="
 .boot_id_char: db "0", 0x00
 .loaded: db "loaded stage2 payload", 0x00
 .mmap: db "mmap done", 0x00
