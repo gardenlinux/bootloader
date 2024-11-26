@@ -10,7 +10,8 @@ BITS 16
 ; 0x0007dbe - 0x0007dfe partition table
 ; 0x0007dfe - 0x0007e00 boot signature
 ; 0x0007e00 - 0x0008200 stage2 bootloader
-; 0x0008200 - 0x0008600 mmap (maps disk LBA to memory locations)
+; 0x0008200 - 0x0008400 boot config
+; 0x0008400 - 0x0008800 mmap (maps disk LBA to memory locations)
 ;                       format:
 ;                         array of 64 entries, each 16 bytes long
 ;                         entry format:
@@ -18,7 +19,7 @@ BITS 16
 ;                           dword  LBA address
 ;                           dword  memory address
 ;                           (zero padding to align each entry on 16 byte boundry)
-; 0x00085fc - 0x0008600 initrd size (replaces part of the padding of the final mmap entry)
+; 0x00087fc - 0x0008800 initrd size (replaces part of the padding of the final mmap entry)
 ;
 ; 0x0010000 - 0x0018000 real mode kernel code
 ; 0x0018000 - 0x001f000 real mode kernel heap
@@ -36,7 +37,12 @@ stage2_lba:             equ 0x00000021                          ; LBA location o
 stage2_addr:            equ 0x00007e00                          ; memory address of stage2
 stage2_seg:             equ stage2_addr / 0x10                  ; memory segment of stage2
 
-mmap_addr:              equ stage2_addr + 0x0400                ; memory address of mmap
+boot_conf_lba:          equ 0x00000023                          ; LBA location of boot config
+boot_conf_addr:         equ 0x00008200                          ; memory address of boot config
+boot_conf_seg:          equ boot_conf_addr / 0x10               ; memory segment of boot config
+
+mmap_addr:              equ 0x00008400                          ; memory address of mmap
+mmap_seg:               equ mmap_addr / 0x10                    ; memory segment of mmap
 
 real_mode_addr:         equ 0x00010000                          ; memory address of the real mode kernel code
 real_mode_seg:          equ real_mode_addr / 0x10               ; memory segment of the real mode kernel code
@@ -68,9 +74,9 @@ main:
 	mov      si,       strings.init             ; load msg ptr into si
 	call     print_line                         ; print_line(msg)
 
-; load stage2 and mmap from disk into memory
+; load stage2 from disk into memory
 	mov      si,       dap                      ; point si at dap (pre-initialized with source and destination addresses for stage2 load)
-	mov      dl,       0x90                     ; select disk 0x80 (primary HDD) for disk access
+	mov      dl,       0x80                     ; select disk 0x80 (primary HDD) for disk access
 	mov      ah,       0x42                     ; select LBA read mode for disk access
 	int      0x13                               ; perform disk access via interrupt
 	jc       disk_read_error                    ; on error jump to print errror msg and halt
@@ -78,7 +84,25 @@ main:
 	mov      si,       strings2.loaded          ; load msg ptr into si
 	call     print_line                         ; print_line(msg)
 
-; stage2 functions
+; from here we can use stage2 functions
+	call     pick_entry                         ; look ot boot_conf and decide which entry to pick
+	                                            ; after this call ax = mmap LBA, cx = boot id, si = ptr to entry label
+
+	push     ax                                 ; save ax
+	call     print_line                         ; print selected entries label
+	pop      ax                                 ; restore ax
+
+	push     ax                                 ; sove ax
+	mov      si,       cx                       ; load boot id into si
+	mov      al,       [strings.hex_map+si]     ; convert boot id to ascii
+	mov      [strings2.boot_id_char], al        ; write out boot id ascii
+
+	mov      si,       strings2.cmdline_append  ; load msg ptr into si
+	call     print_line                         ; print_line(msg)
+	pop      ax                                 ; restore ax
+
+	call     read_mmap                          ; read mmap of selected entry into memory
+
 	call     load_mmap                          ; load all sectors defined in mmap into memory
 	mov      si,       strings2.mmap            ; load msg ptr into si
 	call     print_line                         ; print_line(msg)
@@ -160,7 +184,7 @@ dap:
 	db 0x10                                     ; size of struct = 16
 	db 0x00                                     ; unused
 .sectors:
-	dw 0x0004                                   ; number of sectors to read
+	dw 0x0003                                   ; number of sectors to read
 	dw 0x0000                                   ; memory offset within segment (always 0 here)
 .segment:
 	dw stage2_seg                               ; memory segment
@@ -193,15 +217,73 @@ debug:
 
 ; empty partition table
 %rep 0x01fe-($-$$)
-	db 0
+	db 0x00
 %endrep
 
 ; add the required boot signature
 	dw 0xaa55
 
-; stage2 bootloader, this will be loaded from LBA 33 (just after GPT table) and placed directly after the MBR in memory
-stage2:
-	; TODO
+; look at boot config and choose which entry to boot
+; returns:
+;   ax: LBA of mmap
+;   cx: entry id
+;   si: ptr to entry label
+; clobbers: ax, bx, cx, dx, si
+pick_entry:
+	mov      cx,       0x0000                   ; initialize loop counter
+.loop:
+	cmp      cx,       0x0004                   ; check we haven't surpassed max of 4 boot entries
+	jge      pick_entry_error                   ; if so goto error
+
+	mov      si,       cx                       ; copy loop counter to si
+	shl      si,       0x07                     ; multiply by 128 (size of boot config entry)
+	mov      bl,       [boot_conf_addr+si]      ; read boot entry cntr into bl
+
+	cmp      bl,       0x00                     ; check boot counter not equal 0x00
+	jne      .found                             ; if so use this boot entry
+
+	inc      cx                                 ; else increment the loop counter
+	jmp      .loop                              ; and continue loop
+
+.found:
+	cmp      bl,       0xff                     ; check if boot counter is special "boot blessed" value
+	je       .no_dec                            ; if so skip the decrement step
+	dec byte [boot_conf_addr+si]                ; decrement the boot tries remaining counter
+
+	mov word  [dap.sectors], 0x0001             ; set dap to one sector only
+	mov word  [dap.segment], boot_conf_seg      ; set dap to point at boot config memory sector
+	mov dword [dap.lba],     boot_conf_lba      ; set dap to use boot config LBA
+
+	mov      dx,       si                       ; save current value of si
+	mov      si,       dap                      ; point si at dap
+	mov      dl,       0x80                     ; select disk 0x80 (primary HDD) for disk access
+	mov      ah,       0x43                     ; select LBA write mode for disk access
+	int      0x13                               ; perform disk access via interrupt
+	jc       disk_read_error                    ; on error jump to print errror msg and halt
+	mov      si, dx                             ; restore si from saved value
+
+.no_dec:
+	mov      ax,       [0x01+boot_conf_addr+si] ; load mmap LBA of entry into ax
+	add      si,       0x03+boot_conf_addr      ; set si to point at boot entry label
+	ret                                         ; return from call
+
+; read mmap of selected entry to memory
+; inputs:
+;   ax: LBA of mmap
+; outputs: [mmap_addr]
+; clobbers: ax, dx, si
+read_mmap:
+	mov word [dap.sectors], 0x0002              ; set dap to 2 sectors
+	mov word [dap.segment], mmap_seg            ; set dap to point at mmap memory sector
+	mov      [dap.lba],     ax                  ; set dap to use boot config LBA
+
+	mov      si,       dap                      ; point si at dap
+	mov      dl,       0x80                     ; select disk 0x80 (primary HDD) for disk access
+	mov      ah,       0x42                     ; select LBA read mode for disk access
+	int      0x13                               ; perform disk access via interrupt
+	jc       disk_read_error                    ; on error jump to print errror msg and halt
+
+	ret                                         ; return from call
 
 ; iterates mmap and loads all sections into memory
 ; clobbers: ax, bx, cx, dx, si, [buffer 0x040000-0x048000]
@@ -309,7 +391,7 @@ read_sectors:
 	mov      si,       dap                      ; point si at dap
 	mov      dl,       0x80                     ; select disk 0x80 (primary HDD) for disk access
 	mov      ah,       0x42                     ; select LBA read mode for disk access
-	int      0x13                               ; perform disk access via interrupt (all registers still set from previous call)
+	int      0x13                               ; perform disk access via interrupt
 	jc       disk_read_error                    ; on error jump to print errror msg and halt
 
 	mov      dx,       cx                       ; store cx in dx
@@ -350,7 +432,13 @@ read_sectors:
 ; print disk read error and halt
 block_move_error:
 	mov      si,       strings2.move_error      ; load msg ptr into si
-	jmp     error                               ; error(msg)
+	jmp      error                              ; error(msg)
+
+; print no valid entry error and halt
+pick_entry_error:
+	mov      si,       strings2.entry_error     ; load msg ptr into si
+	mov      ax,       0x0000                   ; set error code undefined
+	jmp      error                              ; error(msg)
 
 ; global descriptor table
 gdt:
@@ -376,16 +464,19 @@ gdt:
 
 ; string constants
 strings2:
+.cmdline_append: db "bootloader.entry="
+.boot_id_char: db "0", 0x00
 .loaded: db "loaded stage2 payload", 0x00
 .mmap: db "mmap done", 0x00
 .move_error: db "memory block move", 0x00
+.entry_error: db "no valid boot entry available", 0x00
 
 ; assert that we have not over-run 1K for our stage2 payload
 %if ($-$$) > 0x0600
-	%error "MBR code exceeds 1024 bytes"
+	%error "stage2 code exceeds 1024 bytes"
 %endif
 
 ; padd remaining space with zeros
 %rep 0x0600-($-$$)
-	db 0
+	db 0x00
 %endrep
