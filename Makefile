@@ -4,43 +4,19 @@ MAKEFLAGS += --no-builtin-rules
 .PHONY: link_tmp clean test
 .SECONDARY: linux/arch/x86/boot/bzImage linux/.config linux
 
-disk: mbr.bin config.bin mmap.bin bzImage initrd cmdline
+disk: build_disk.sh mbr.bin bzImage initrd uki.efi
 	echo 'building $@ [$^]'
-	truncate -s 0 '$@'
-	truncate -s 1GiB '$@'
-	dd if=$(word 1,$^) of=$@ bs=512 count=1 conv=notrunc 2> /dev/null
-	dd if=$(word 1,$^) of=$@ bs=512 iseek=1 count=2 seek=33 conv=notrunc 2> /dev/null
-	dd if=$(word 2,$^) of=$@ bs=512 count=1 seek=35 conv=notrunc 2> /dev/null
-	dd if=$(word 3,$^) of=$@ bs=512 count=2 seek=36 conv=notrunc 2> /dev/null
-	dd if=$(word 4,$^) of=$@ bs=512 count=32768 seek=2048 conv=notrunc 2> /dev/null
-	dd if=$(word 5,$^) of=$@ bs=512 count=1048576 seek=131072 conv=notrunc 2> /dev/null
-	dd if=$(word 6,$^) of=$@ bs=512 count=1 seek=2047 conv=notrunc 2> /dev/null
+	./$^ '$@'
 
 mbr.bin: mbr.asm
 	echo 'building $^ -> $@'
 	nasm -f bin -o '$@' '$<'
 	hexdump -vC '$@'
 
-config.bin:
-	dd if=/dev/zero of='$@' bs=512 count=1 2> /dev/null
-	printf '\000\377\377%s' "broken boot entry" | dd of='$@' bs=128 count=1 conv=notrunc 2> /dev/null
-	printf '\002\044\000%s' "test boot entry" | dd of='$@' bs=128 count=1 seek=2 conv=notrunc 2> /dev/null
-	printf '\377\044\000%s' "fallback boot entry" | dd of='$@' bs=128 count=1 seek=3 conv=notrunc 2> /dev/null
-	hexdump -vC '$@'
-
-mmap.bin: mmap initrd
-	echo 'linking $< -> $@'
-	truncate -s 0 '$@'
-	truncate -s 1KiB '$@'
-	./write_mmap.py < '$<' | dd of='$@' bs=512 count=2 conv=notrunc 2> /dev/null
-	initrd_size="$$(du -b '$(word 2, $^)' | cut -f 1)" && ./inject_initrd_size.py '$@' "$$initrd_size"
-	hexdump -C '$@'
-	./parse_mmap.py '$@'
-
-mmap: bzImage initrd cmdline
-	./bzImage_to_mmap bzImage 2048 65536 1048576 > '$@'
-	echo "1 2047 126976" >> '$@'
-	initrd_sects="$$(( ( $$(du -b '$(word 2, $^)' | cut -f 1) + 511 ) / 512 ))" && echo "$$initrd_sects 131072 67108864" >> '$@'
+uki.efi: bzImage initrd cmdline
+	echo 'merging $^ -> $@'
+	ukify build --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --uname 6.12.0 --linux '$(word 1,$^)' --initrd '$(word 2,$^)' --cmdline @'$(word 3,$^)' --os-release @/dev/null --output '$@'
+	x86_64-linux-gnu-objdump -h '$@'
 
 cmdline:
 	printf 'rdinit=/hello\0' > '$@'
@@ -82,7 +58,7 @@ link_tmp:
 	[ -d .tmp ] || ln -sf "$$(mktemp -d)" .tmp
 
 clean: clean_tmp
-	rm -f disk mbr.bin mmap mmap.bin bzImage cmdline initrd hello
+	rm -f disk mbr.bin mmap mmap.bin config.bin bzImage cmdline initrd uki.efi hello
 
 clean_tmp:
 	rm -rf "$$(readlink .tmp)" .tmp linux

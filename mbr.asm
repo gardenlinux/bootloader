@@ -33,11 +33,11 @@ BITS 16
 
 
 
-stage2_lba:             equ 0x00000021                          ; LBA location of stage2 on disk
+stage2_lba:             equ 0x00000022                          ; LBA location of stage2 on disk
 stage2_addr:            equ 0x00007e00                          ; memory address of stage2
 stage2_seg:             equ stage2_addr / 0x10                  ; memory segment of stage2
 
-boot_conf_lba:          equ 0x00000023                          ; LBA location of boot config
+boot_conf_lba:          equ 0x00000024                          ; LBA location of boot config
 boot_conf_addr:         equ 0x00008200                          ; memory address of boot config
 boot_conf_seg:          equ boot_conf_addr / 0x10               ; memory segment of boot config
 
