@@ -6,8 +6,7 @@ import struct
 def main():
 	sys.tracebacklimit = 0
 
-	with open(sys.argv[1], "rb") as f:
-		data = f.read(0x400)
+	data = sys.stdin.buffer.read(0x400)
 
 	for i in range(64):
 		entry = data[i*16:(i+1)*16]

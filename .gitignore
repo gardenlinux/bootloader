@@ -1,9 +1,12 @@
 .tmp
+busybox
+busybox.cpio
 bzImage
 cmdline
 config.bin
 disk
 hello
+hello.cpio
 initrd
 linux
 mbr.bin

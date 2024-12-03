@@ -19,11 +19,26 @@ uki.efi: bzImage initrd cmdline
 	x86_64-linux-gnu-objdump -h '$@'
 
 cmdline:
-	printf 'rdinit=/hello\0' > '$@'
+	printf 'rdinit=/bin/sh\0' > '$@'
 
-initrd: hello
+initrd: busybox.cpio
+	ln -sf '$<' '$@'
+
+hello.cpio: hello
 	echo 'building $@'
 	echo $^ | cpio -o -H newc > '$@'
+
+busybox.cpio: busybox
+	echo 'building $@'
+	(cd '$<' && find . | cpio -o -H newc) > '$@'
+
+busybox:
+	rm -rf '.tmp/$@'
+	mkdir '.tmp/$@'
+	mkdir '.tmp/$@/bin'
+	cp /usr/bin/busybox '.tmp/$@/bin/'
+	'.tmp/$@/bin/busybox' --list | grep -v busybox | while read i; do ln -s busybox ".tmp/$@/bin/$$i"; done
+	ln -sfT '.tmp/$@' '$@'
 
 hello: hello.c
 	echo 'compiling $^ -> $@'
@@ -47,8 +62,7 @@ linux/.config: | linux
 
 linux: .tmp
 	echo 'downloading linux kernel sources'
-	rm -rf '.tmp/$@'
-	mkdir '.tmp/$@'
+	rm -rf .tmp/linux-6.12
 	curl 'https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.tar.xz' | xz -d | tar -x -C .tmp
 	ln -s .tmp/linux-6.12 '$@'
 
@@ -57,11 +71,17 @@ linux: .tmp
 link_tmp:
 	[ -d .tmp ] || ln -sf "$$(mktemp -d)" .tmp
 
-clean: clean_tmp
-	rm -f disk mbr.bin mmap mmap.bin config.bin bzImage cmdline initrd uki.efi hello
+clean_disk:
+	rm -f disk mmap mmap.bin config.bin cmdline initrd
+
+clean: clean_disk clean_tmp
+	rm -f mbr.bin bzImage uki.efi hello hello.cpio busybox.cpio
 
 clean_tmp:
-	rm -rf "$$(readlink .tmp)" .tmp linux
+	rm -rf "$$(readlink .tmp)" .tmp linux busybox
+
+run_vm: disk
+	qemu-system-x86_64 -machine pc -cpu qemu64 -accel tcg -m 1024 -nodefaults -nographic -serial mon:stdio -drive file='$<',format=raw
 
 test: disk
 	echo 'running $< in qemu'

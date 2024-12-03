@@ -80,11 +80,11 @@ truncate -s 0 mmap.bin
 truncate -s 1KiB mmap.bin
 ./write_mmap.py < mmap | dd of=mmap.bin bs=512 count=2 conv=notrunc 2> /dev/null
 
-initrd_size="$(du -b "$initrd" | cut -f 1)"
+initrd_size="$(du -b -L "$initrd" | cut -f 1)"
 ./inject_initrd_size.py mmap.bin "$initrd_size"
 
 hexdump -C mmap.bin
-./parse_mmap.py mmap.bin
+./parse_mmap.py < mmap.bin
 
 dd if=/dev/zero of="config.bin" bs=512 count=1 2> /dev/null
 printf '\000\377\377%s' "broken boot entry" | dd of="config.bin" bs=128 count=1 conv=notrunc 2> /dev/null
