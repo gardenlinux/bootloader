@@ -14,3 +14,4 @@ mmap
 mmap.bin
 serial.log
 uki.efi
+util/bootloader_util

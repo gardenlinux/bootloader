@@ -31,6 +31,7 @@ type BootEntry struct {
 	BootCount        uint8  `json:"boot_count"`
 	MmapSector       uint16
 	Mmap             []Mmap
+	InitrdSize       uint32
 }
 
 type SectorRange struct {
@@ -83,22 +84,24 @@ func sectionToSectorRanges(section SectorRange, sector_ranges []SectorRange) []S
 	return result
 }
 
-func getUkiMmap(disk *disk.Disk, partition *gpt.Partition, uki_path string) ([]Mmap, error) {
+func getUkiMmap(disk *disk.Disk, partition *gpt.Partition, uki_path string) ([]Mmap, uint32, error) {
+	var initrd_size uint32
+
 	file_system, err := fat32.Read(disk.Backend, partition.GetSize(), partition.GetStart(), 512)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	file, err := file_system.OpenFile(uki_path, os.O_RDONLY)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	fat32_file := file.(*fat32.File)
 
 	disk_ranges, err := fat32_file.GetDiskRanges()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	sector_ranges := make([]SectorRange, len(disk_ranges))
@@ -111,24 +114,24 @@ func getUkiMmap(disk *disk.Disk, partition *gpt.Partition, uki_path string) ([]M
 
 	buf, err := io.ReadAll(file)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	pe_file, err := pe.NewBytes(buf, &pe.Options{})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	err = pe_file.Parse()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	sections := make(map[string]SectorRange, len(pe_file.Sections)+1)
 
 	for _, section := range pe_file.Sections {
 		if section.Header.PointerToRawData%512 != 0 {
-			return nil, fmt.Errorf("Section %s is not sector aligned: %x\n", section.Header.Name, section.Header.PointerToRawData)
+			return nil, 0, fmt.Errorf("section %s is not sector aligned: %x", section.Header.Name, section.Header.PointerToRawData)
 		}
 
 		section_name := string(bytes.TrimRight(section.Header.Name[:], "\x00"))
@@ -154,6 +157,10 @@ func getUkiMmap(disk *disk.Disk, partition *gpt.Partition, uki_path string) ([]M
 				Length: sector_size,
 			}
 		}
+
+		if section_name == ".initrd" {
+			initrd_size = section.Header.SizeOfRawData
+		}
 	}
 
 	mmap_sections := map[string]uint64{
@@ -177,10 +184,10 @@ func getUkiMmap(disk *disk.Disk, partition *gpt.Partition, uki_path string) ([]M
 		}
 	}
 
-	return mmap, nil
+	return mmap, initrd_size, nil
 }
 
-func mmapToBin(mmap []Mmap) ([1024]byte, error) {
+func mmapToBin(mmap []Mmap, initrd_size uint32) ([1024]byte, error) {
 	var bin [1024]byte
 
 	if len(mmap) > 64 {
@@ -201,6 +208,12 @@ func mmapToBin(mmap []Mmap) ([1024]byte, error) {
 		bin_entry[8] = byte(entry.Addr >> 16)
 		bin_entry[9] = byte(entry.Addr >> 24)
 	}
+
+	bin_initrd_size := bin[1020:1024]
+	bin_initrd_size[0] = byte(initrd_size)
+	bin_initrd_size[1] = byte(initrd_size >> 8)
+	bin_initrd_size[2] = byte(initrd_size >> 16)
+	bin_initrd_size[3] = byte(initrd_size >> 32)
 
 	return bin, nil
 }
@@ -312,13 +325,14 @@ func main() {
 		}
 
 		partition := gpt_table.Partitions[boot_entry.Partition]
-		mmap, err := getUkiMmap(disk, partition, "/EFI/Linux/test-boot-entry.efi")
+		mmap, initrd_size, err := getUkiMmap(disk, partition, "/EFI/Linux/test-boot-entry.efi")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to generate mmap for UKI: %v\n", err)
 			os.Exit(1)
 		}
 
 		config.BootEntries[i].Mmap = mmap
+		config.BootEntries[i].InitrdSize = initrd_size
 	}
 
 	disk_file, err := os.OpenFile(disk_path, os.O_WRONLY, 0)
@@ -328,7 +342,7 @@ func main() {
 	}
 
 	for _, entry := range config.BootEntries {
-		mmap_bin, err := mmapToBin(entry.Mmap)
+		mmap_bin, err := mmapToBin(entry.Mmap, entry.InitrdSize)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to encode mmap: %v\n", err)
 			os.Exit(1)

@@ -4,9 +4,12 @@ MAKEFLAGS += --no-builtin-rules
 .PHONY: link_tmp clean test
 .SECONDARY: linux/arch/x86/boot/bzImage linux/.config linux
 
-disk: build_disk.sh mbr.bin bzImage initrd uki.efi
-	echo 'building $@ [$^]'
+disk: build_disk.sh mbr.bin uki.efi | util/bootloader_util
+	echo 'building $@'
 	./$^ '$@'
+
+util/bootloader_util:
+	cd util && go build
 
 mbr.bin: mbr.asm
 	echo 'building $^ -> $@'
@@ -72,10 +75,10 @@ link_tmp:
 	[ -d .tmp ] || ln -sf "$$(mktemp -d)" .tmp
 
 clean_disk:
-	rm -f disk mmap mmap.bin config.bin cmdline initrd
+	rm -f disk cmdline initrd
 
 clean: clean_disk clean_tmp
-	rm -f mbr.bin bzImage uki.efi hello hello.cpio busybox.cpio
+	rm -f mbr.bin bzImage uki.efi hello hello.cpio busybox.cpio util/bootloader_util
 
 clean_tmp:
 	rm -rf "$$(readlink .tmp)" .tmp linux busybox
