@@ -1,0 +1,9 @@
+{
+	"boot_entries": [
+		{
+			"partition": 0,
+			"uki_path": "/EFI/Linux/test-boot-entry.efi",
+			"boot_count_enabled": false
+		}
+	]
+}
