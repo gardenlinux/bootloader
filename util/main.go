@@ -325,7 +325,7 @@ func main() {
 		}
 
 		partition := gpt_table.Partitions[boot_entry.Partition]
-		mmap, initrd_size, err := getUkiMmap(disk, partition, "/EFI/Linux/test-boot-entry.efi")
+		mmap, initrd_size, err := getUkiMmap(disk, partition, boot_entry.UkiPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to generate mmap for UKI: %v\n", err)
 			os.Exit(1)
