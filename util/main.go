@@ -273,7 +273,8 @@ func main() {
 		}
 	}
 
-	disk, err := diskfs.Open(disk_path)
+	open_opt := diskfs.WithOpenMode(diskfs.OpenModeOption(os.O_RDWR))
+	disk, err := diskfs.Open(disk_path, open_opt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open disk \"%s\": %v\n", disk_path, err)
 		os.Exit(1)
